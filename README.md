@@ -1,11 +1,14 @@
-```
-### Prerequisites ###
+
+### Prerequisites
+
 * qemu
 
-### Run ###
+### Run
+
 ```
 make run
 ```
+### Random hints
 
 Install `xorriso` package, if `grub-mkrescue` complains
 ```
