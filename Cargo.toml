@@ -1,0 +1,23 @@
+[package]
+name = "hello-os"
+version = "0.1.0"
+authors = ["Anton Burtsev <aburtsev@uci.edu>"]
+edition = "2018"
+
+[lib]
+crate-type = ["staticlib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[dependencies]
+x86 = "0.19.0"
+spin = "0.5.0"
+volatile = "0.2.3"
+
+[dependencies.lazy_static]
+version = "1.3.0"
+features = ["spin_no_std"]

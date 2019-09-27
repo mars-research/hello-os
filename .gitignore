@@ -1,3 +1,5 @@
-*build
+/target
+**/*.rs.bk
 *.swp
+Cargo.lock
 serial.log

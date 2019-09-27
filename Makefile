@@ -1,19 +1,25 @@
+
 arch ?= x86_64
 kernel := build/kernel.bin
-iso := build/os.iso
+iso := build/hello.iso
 
 linker_script := linker.ld
-grub_cfg := grub.cfg
-assembly_source_files := $(wildcard *.asm)
-assembly_object_files := $(patsubst %.asm, build/%.o, $(assembly_source_files))
+grub_cfg := boot/grub.cfg
+assembly_source_files := $(wildcard src/*.asm)
+assembly_object_files := $(patsubst src/%.asm, build/%.o, $(assembly_source_files))
 
-.PHONY: all clean run iso kernel
+target ?= $(arch)-hello-os
+rust_os := target/$(target)/debug/libhello_os.a
+
+.PHONY: all clean run iso kernel doc disk
 
 all: $(kernel)
 
+release: $(releaseKernel)
+
 clean:
-	@rm -r build
-	@rm serial.log
+	rm -r build
+	cargo clean
 
 run: $(iso)
 	qemu-system-x86_64 -cdrom $(iso) -vga std -s -serial file:serial.log
@@ -28,11 +34,14 @@ $(iso): $(kernel) $(grub_cfg)
 	grub-mkrescue -o $(iso) build/isofiles #2> /dev/null
 	@rm -r build/isofiles
 
-$(kernel): $(assembly_object_files) $(linker_script)
-	ld -n -T $(linker_script) -o $(kernel) $(assembly_object_files)
+$(kernel): kernel $(rust_os) $(assembly_object_files) $(linker_script)
+	ld -n --gc-sections -T $(linker_script) -o $(kernel) $(assembly_object_files) $(rust_os)
+
+kernel:
+	@RUST_TARGET_PATH=$(shell pwd) cargo xbuild --target x86_64-hello-os.json
 
 # compile assembly files
-build/%.o: %.asm
+build/%.o: src/%.asm
 	@mkdir -p $(shell dirname $@)
 	nasm -felf64 $< -o $@
 
