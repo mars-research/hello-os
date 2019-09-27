@@ -1,17 +1,22 @@
 ### Prerequisites
 * Install Qemu
 
+You can run the "Hello world!" bootable example under Qemu emulator. So first 
+install Qemu
+
 ```
 sudo apt-get install qemu
 ```
 
 * Install nasm
 
+To build the ASM files you'll need nasm: 
+
 ```
 sudo apt-get install nasm
 ```
 
-### Run
+### Run under QEMU 
 
 ```
 make run
