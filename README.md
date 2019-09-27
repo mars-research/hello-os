@@ -1,8 +1,11 @@
+These instructions work on Ubuntu 18.04
+
 ### Prerequisites
+
 * Install Qemu
 
-You can run the "Hello world!" bootable example under Qemu emulator. So first 
-install Qemu
+You can run this boot into Rust demo under Qemu emulator or on baremetal hardware. 
+I suggest to try Qemu first. Install Qemu
 
 ```
 sudo apt-get install qemu
@@ -41,7 +44,7 @@ For me it's /dev/sda or /dev/sdb but my laptop runs off an NVMe device, so for y
 /dev/sda may very well be your root device, not a USB!
 
 ```
-sudo dd if=build/os.iso of=/dev/<your_usb_drive> bs=1MB
+sudo dd if=build/hello.iso of=/dev/<your_usb_drive> bs=1MB
 sync
 ```
 
@@ -57,7 +60,7 @@ root='hd0,1'
 
 ```
 set timeout=30
-menuentry "Hello World OS" {
+menuentry "Hello World" {
     insmod ext2
     set root='hd0,1'
     set kernel='/boot/kernel.bin'
@@ -73,7 +76,7 @@ Update grub
   sudo sudo update-grub2
 ```
 
-Reboot and choose the "RedLeaf" entry. Make sure that you can see the grub menu
+Reboot and choose the "Hello World" entry. Make sure that you can see the grub menu
 list by editing /etc/default/grub making sure that GRUB_HIDDEN_TIMEOUT_QUIET is
 set to "false". 
 

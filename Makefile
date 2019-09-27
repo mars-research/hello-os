@@ -1,6 +1,6 @@
 arch ?= x86_64
 kernel := build/kernel.bin
-iso := build/os.iso
+iso := build/hello.iso
 
 linker_script := linker.ld
 grub_cfg := grub.cfg
