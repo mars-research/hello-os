@@ -15,8 +15,13 @@ clean:
 	@rm -r build
 	@rm serial.log
 
-run: $(iso)
+qemu: $(iso)
 	qemu-system-x86_64 -cdrom $(iso) -vga std -s -serial file:serial.log
+
+.PHONY: qemu-gdb-nox
+qemu-gdb-nox: $(iso)
+	qemu-system-x86_64 -cdrom $(iso) -nographic -vga std -s -serial file:serial.log -S
+
 
 iso: $(iso)
 	@echo "Done"

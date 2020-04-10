@@ -3,6 +3,7 @@ global start
 section .text
 bits 32    ; By default, GRUB sets us to 32-bit mode.
 start:
+    
     ; Print `Hello world` to screen
     mov word [0xb8000], 0x0248 ; H
     mov word [0xb8002], 0x0265 ; e

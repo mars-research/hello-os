@@ -22,13 +22,28 @@ sudo apt-get install nasm
 ### Run under QEMU 
 
 ```
-make run
+make qemu
 ```
 
 If you see complains from the `grub-mkrescue`, install the `xorriso` package
 ```
 grub-mkrescue: warning: Your xorriso doesn't support `--grub2-boot-info'. Some features are disabled. Please use xorriso 1.2.9 or later..                                                 
 ```
+
+### Debug wigh QEMU and GDB
+
+You will need two shell windows opened in the same folder. In the first shell type: 
+
+```
+make qemu
+```
+
+In the other shell start gdb like
+
+```
+gdb
+```
+
 
 ### Boot on baremetal from a USB drive
 
