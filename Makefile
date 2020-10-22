@@ -1,13 +1,11 @@
 arch ?= x86_64
-kernel := build/kernel.bin
-iso := build/hello.iso
+kernel := kernel.bin
 
 linker_script := linker.ld
-grub_cfg := grub.cfg
 assembly_source_files := $(wildcard *.asm)
 assembly_object_files := $(patsubst %.asm, build/%.o, $(assembly_source_files))
 
-.PHONY: all clean run iso kernel
+.PHONY: all clean kernel qemu qemu-gdb
 
 all: $(kernel)
 
@@ -15,29 +13,17 @@ clean:
 	@rm -r build
 	@rm serial.log
 
-qemu: $(iso)
-	qemu-system-x86_64 -cdrom $(iso) -vga std -s -serial file:serial.log
+qemu: $(kernel)
+	qemu-system-x86_64 -vga std -s -serial file:serial.log -kernel $(kernel)
 
-.PHONY: qemu-gdb-nox
-qemu-gdb-nox: $(iso)
-	qemu-system-x86_64 -cdrom $(iso) -nographic -vga std -s -serial file:serial.log -S
-
-
-iso: $(iso)
-	@echo "Done"
-
-$(iso): $(kernel) $(grub_cfg)
-	@mkdir -p build/isofiles/boot/grub
-	cp $(kernel) build/isofiles/boot/kernel.bin
-	cp $(grub_cfg) build/isofiles/boot/grub
-	grub-mkrescue -o $(iso) build/isofiles #2> /dev/null
-	@rm -r build/isofiles
+qemu-gdb: $(kernel)
+	qemu-system-x86_64 -vga std -s -serial file:serial.log -S -kernel $(kernel)
 
 $(kernel): $(assembly_object_files) $(linker_script)
-	ld -n -T $(linker_script) -o $(kernel) $(assembly_object_files)
+	ld -m elf_i386 -n -T $(linker_script) -o $(kernel) $(assembly_object_files)
 
 # compile assembly files
 build/%.o: %.asm
 	@mkdir -p $(shell dirname $@)
-	nasm -felf64 $< -o $@
+	nasm -felf32 $< -o $@
 
