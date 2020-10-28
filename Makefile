@@ -12,9 +12,9 @@ assembly_object_files := $(patsubst %.asm, build/%.o, $(assembly_source_files))
 all: $(kernel)
 
 clean:
-	@rm -r build
-	@rm serial.log
-	@rm -r build/isofiles
+	- @rm -fr build
+	- @rm -f serial.log *.o
+	- @rm -fr build/isofiles
 
 qemu: $(iso)
 	qemu-system-x86_64 -cdrom $(iso) -vga std -s -serial file:serial.log
