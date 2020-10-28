@@ -7,7 +7,7 @@ grub_cfg := grub.cfg
 assembly_source_files := $(wildcard *.asm)
 assembly_object_files := $(patsubst %.asm, build/%.o, $(assembly_source_files))
 
-.PHONY: all clean run iso kernel
+.PHONY: all clean iso kernel qemu qemu-gdb
 
 all: $(kernel)
 
@@ -19,10 +19,8 @@ clean:
 qemu: $(iso)
 	qemu-system-x86_64 -cdrom $(iso) -vga std -s -serial file:serial.log
 
-.PHONY: qemu-gdb-nox
-qemu-gdb-nox: $(iso)
-	qemu-system-x86_64 -cdrom $(iso) -nographic -vga std -s -serial file:serial.log -S
-
+qemu-gdb: $(iso)
+	qemu-system-x86_64 -cdrom $(iso) -vga std -s -serial file:serial.log -S
 
 iso: $(iso)
 	@echo "Done"
