@@ -14,6 +14,7 @@ all: $(kernel)
 clean:
 	@rm -r build
 	@rm serial.log
+	@rm -r build/isofiles
 
 qemu: $(iso)
 	qemu-system-x86_64 -cdrom $(iso) -vga std -s -serial file:serial.log
@@ -31,7 +32,6 @@ $(iso): $(kernel) $(grub_cfg)
 	cp $(kernel) build/isofiles/boot/kernel.bin
 	cp $(grub_cfg) build/isofiles/boot/grub
 	grub-mkrescue -o $(iso) build/isofiles #2> /dev/null
-	#rm -r build/isofiles
 
 $(kernel): $(assembly_object_files) $(linker_script)
 	ld -n -T $(linker_script) -o $(kernel) $(assembly_object_files)
