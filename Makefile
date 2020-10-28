@@ -10,8 +10,8 @@ assembly_object_files := $(patsubst %.asm, build/%.o, $(assembly_source_files))
 all: $(kernel)
 
 clean:
-	@rm -r build
-	@rm serial.log
+	- @rm -fr build *.o $(kernel)
+	- @rm -f serial.log
 
 qemu: $(kernel)
 	qemu-system-x86_64 -vga std -s -serial file:serial.log -kernel $(kernel)
