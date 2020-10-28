@@ -1,6 +1,7 @@
 ; Multiboot v1 - Compliant Header for QEMU 
 ; We use multiboot v1 since Qemu "-kernel" doesn't support 
 ; multiboot v2
+; https://www.gnu.org/software/grub/manual/multiboot/multiboot.html (Section 3.1.1)
 
 ; This part MUST be 4-byte aligned, so we solve that issue using 'ALIGN 4'
 ALIGN 4

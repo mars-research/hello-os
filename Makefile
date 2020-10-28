@@ -1,4 +1,3 @@
-arch ?= x86_64
 kernel := kernel.bin
 
 linker_script := linker.ld
