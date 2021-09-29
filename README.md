@@ -47,6 +47,12 @@ gdb
 
 ### Boot on baremetal from a USB drive
 
+Build the ISO disk image
+
+```
+make iso
+```
+
 Copy the ISO disk image to the USB stick (make sure to use correct device for the 
 USB drive, otherwise you can overwrite your hard disk). You can use lsblk on Ubuntu
 to list block devices
