@@ -63,7 +63,7 @@ kernel: $(kernel)
 
 .PHONY: $(kernel)
 $(kernel):
-	cargo build --artifact-dir=$(PWD)/build
+	cargo build --artifact-dir=$(PWD)/build --target=$(PWD)/src/x86_64-unknown-none.json
 
 .PHONY: gdb
 gdb:
