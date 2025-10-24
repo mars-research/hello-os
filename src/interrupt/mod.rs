@@ -139,6 +139,7 @@ unsafe extern "C" fn invalid_opcode(regs: &mut InterruptStackFrame) {}
 /// Implement other handlers here
 unsafe extern "C" fn timer(regs: &mut InterruptStackFrame) {
     // print .
+    // don't forget to acknowledge the interrupt here
 }
 
 /// Registers passed to the interrupt handler
