@@ -2,5 +2,5 @@
 target = "src/x86_64-unknown-none.json"
 
 [unstable]
-build-std = [ "core" ]
+build-std = [ "core", "alloc"]
 unstable-options = true
