@@ -75,23 +75,57 @@ pub unsafe fn init_cpu() {
     // You need to initialize other GDT entries, e.g., kernel data, user
     // code and data and TSS
     //
+    gdt.kernel_data = {
+        let mut access = AccessByte::new();
+        access.set_privilege(0);
+        access.set_read_write(true);
+
+        GdtEntry::new(0, 0, access, 0)
+    };
+    gdt.user_data = {
+        let mut access = AccessByte::new();
+        access.set_privilege(3);
+        access.set_read_write(true);
+
+        GdtEntry::new(0, 0, access, 0)
+    };
+    gdt.user_code = {
+        let mut access = AccessByte::new();
+        access.set_privilege(3);
+        access.set_executable(true);
+
+        GdtEntry::new(0, 0, access, GDT_F_LONG_MODE)
+    };
+    gdt.tss = {
+        let mut access = SystemAccessByte::new(SystemDescriptorType::AvailableTss);
+        access.set_privilege(0);
+        access.set_descriptor_type(SystemDescriptorType::AvailableTss);
+
+        BigGdtEntry::new(
+            tss_addr as u64,
+            mem::size_of::<TaskStateSegment>() as u32 - 1,
+            access,
+            0,
+        )
+    };
+
+
+
     // For TSS use SystemAccessByte, set privilege to 3 and use BigGdtEntry type
     // Use tss_addr as a pointer (offset)
     // and mem::size_of::<TaskStateSegment>() as u32 as limit.
 
-    unsafe {
-        // Load GDT
-        lgdt(&gdt.get_pointer());
+    // Load GDT
+    lgdt(&gdt.get_pointer());
 
-        // We don't load FS and GS
-        // we will use one of them to implement per-CPU data structures.
-        use GlobalDescriptorTable as GDT;
-        load_cs(SegmentSelector::new(GDT::KERNEL_CODE_INDEX, Ring::Ring0));
-        load_ds(SegmentSelector::new(GDT::KERNEL_DATA_INDEX, Ring::Ring0));
-        load_es(SegmentSelector::new(GDT::KERNEL_DATA_INDEX, Ring::Ring0));
-        load_ss(SegmentSelector::new(GDT::KERNEL_DATA_INDEX, Ring::Ring0));
-        load_tr(SegmentSelector::new(GDT::TSS_INDEX, Ring::Ring0));
-    }
+    // We don't load FS and GS
+    // we will use one of them to implement per-CPU data structures.
+    use GlobalDescriptorTable as GDT;
+    load_cs(SegmentSelector::new(GDT::KERNEL_CODE_INDEX, Ring::Ring0));
+    load_ds(SegmentSelector::new(GDT::KERNEL_DATA_INDEX, Ring::Ring0));
+    load_es(SegmentSelector::new(GDT::KERNEL_DATA_INDEX, Ring::Ring0));
+    load_ss(SegmentSelector::new(GDT::KERNEL_DATA_INDEX, Ring::Ring0));
+    load_tr(SegmentSelector::new(GDT::TSS_INDEX, Ring::Ring0));
 }
 
 /// A Global Descriptor Table.
@@ -143,6 +177,9 @@ impl GlobalDescriptorTable {
             user_data: GdtEntry::empty(),
             tss: BigGdtEntry::empty(),
         }
+    }
+    pub const fn new() -> Self {
+        Self::empty()
     }
 
     /// Returns a pointer to this GDT.

@@ -50,5 +50,5 @@ SECTIONS {
     *(.gcc_except_table)
     . = ALIGN(4K);
   }
-
+  __end = .;
 }

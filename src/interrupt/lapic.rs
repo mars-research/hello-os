@@ -17,20 +17,18 @@ use crate::cpu::{self, get_cpu_id};
 //use crate::cpu;
 /// Returns the 4KiB LAPIC region.
 unsafe fn probe_apic() -> &'static mut [u32] {
-    unsafe {
-        let msr27: u32 = msr::rdmsr(msr::APIC_BASE) as u32;
-        let lapic = (msr27 & 0xffff_0000) as usize as *mut u32;
-        slice::from_raw_parts_mut(lapic, 4096 / 4)
-    }
+    let msr27: u32 = msr::rdmsr(msr::APIC_BASE) as u32;
+    let lapic = (msr27 & 0xffff_0000) as usize as *mut u32;
+    slice::from_raw_parts_mut(lapic, 4096 / 4)
 }
 
 /// Initializes LAPIC in xAPIC mode.
 pub unsafe fn init() {
     let cpu = cpu::get_current();
-    let apic_region: &'static mut [u32] = unsafe { probe_apic() };
+    let apic_region: &'static mut [u32] = probe_apic();
     let mut xapic = XAPIC::new(apic_region);
     xapic.attach();
-    xapic.tsc_set_oneshot(0xfffffffe);
+    xapic.tsc_set_oneshot(0xfffffffe); 
     xapic.tsc_enable(32);
 
     cpu.xapic.write(xapic);
@@ -59,5 +57,5 @@ pub fn end_of_interrupt() {
 
 /// Boots an application processor.
 pub unsafe fn boot_ap(cpu_id: u32, stack: u64, code: u64) {
-    // Will need to implement this to boot other CPUs, but not now
+    // Will need to implement this to boot other CPUs, but not now    
 }

@@ -23,6 +23,7 @@ const IST_STACK_SIZE: usize = 1 * 1024 * 1024; // 1 MiB
 
 #[repr(C, align(4096))]
 pub struct Cpu {
+
     /// The CPU ID.
     ///
     /// Currently it's the logical APIC ID.
@@ -39,6 +40,8 @@ pub struct Cpu {
 
     /// The Interrupt Stacks.
     pub ist: [IstStack; 7],
+
+
 }
 
 /// A stack.
@@ -48,13 +51,16 @@ pub struct Stack<const SZ: usize>([u8; SZ]);
 /// An IST stack.
 pub type IstStack = Stack<IST_STACK_SIZE>;
 
+
 impl<const SZ: usize> Stack<SZ> {
     pub const fn new() -> Self {
         Self([0u8; SZ])
     }
 
     pub fn bottom(&self) -> *const u8 {
-        unsafe { (self.0.as_ptr() as *const u8).add(SZ) }
+        unsafe {
+            (self.0.as_ptr() as *const u8).add(SZ)
+        }
     }
 }
 
@@ -65,22 +71,38 @@ impl Cpu {
     pub const fn new() -> Self {
         Self {
             // Implement this
+            id: 0,
+            xapic: MaybeUninit::uninit(),
+            gdt: GlobalDescriptorTable::new(),
+            tss: TaskStateSegment::new(),
+            ist: [
+                IstStack::new(),
+                IstStack::new(),
+                IstStack::new(),
+                IstStack::new(),
+                IstStack::new(),
+                IstStack::new(),
+                IstStack::new(),
+            ],
         }
     }
 }
 
 /// Returns a handle to the current CPU's data structure.
-/// We plan to implement support for per-CPU data structures via thread local
-/// variables for now just make sure you have one global CPU data structure and
+/// We plan to implement support for per-CPU data structures via thread local 
+/// variables for now just make sure you have one global CPU data structure and 
 /// return it from this method
 pub fn get_current() -> &'static mut Cpu {
     // Implement this
+    unsafe { &mut *core::ptr::addr_of_mut!(NEW_CPU) }
 }
 
-pub fn get_cpu_id() -> i32 {
+pub fn get_cpu_id() -> i32{
     // Implement this
+    unsafe { NEW_CPU.id as i32 }
 }
 
-pub fn get_cpu_id() -> i32 {
-    // Implement this
-}
+
+// pub fn get_cpu_id() -> i32{
+//     // Implement this
+// }

@@ -5,17 +5,20 @@
 //
 // Licensed under the MIT license <http://opensource.org/licenses/MIT>.
 // See top-level LICENSE.
-
+pub use lapic::set_timer;
 mod exception;
 mod idt;
 mod ioapic;
 mod lapic;
 mod mps;
 pub mod x86_xapic;
+use crate::serial_print;
 
 use core::arch::{asm, naked_asm};
-use idt::Idt;
 use x86::io::{inb, outb};
+use idt::Idt;
+
+use crate::error;
 
 //pub use lapic::{boot_ap, end_of_interrupt, set_timer};
 
@@ -59,13 +62,33 @@ macro_rules! wrap_interrupt_with_error_code {
                 "push rsi",
                 "push rdx",
                 "push rcx",
-
+                "push r8",
+                "push r9",
+                "push r10",
+                "push r11",
+                "push rbx",
+                "push rbp",
+                "push r12",
+                "push r13",
+                "push r14",
+                "push r15",
                  // push missing registers
                 // fn handler(registers: &mut InterruptStackFrame)
                 "mov rdi, rsp",
                 "call {handler}",
 
                 // pop missing registers
+                "pop r15",
+                "pop r14",
+                "pop r13",
+                "pop r12",
+                "pop rbp",
+                "pop rbx",
+                "pop r11",
+                "pop r10",
+                "pop r9",
+                "pop r8",
+
                 "pop rcx",
                 "pop rdx",
                 "pop rsi",
@@ -106,12 +129,33 @@ macro_rules! wrap_interrupt {
                 "push rdx",
                 "push rcx",
                 // ... same as above
+                "push r8",
+                "push r9",
+                "push r10",
+                "push r11",
+                "push rbx",
+                "push rbp",
+                "push r12",
+                "push r13",
+                "push r14",
+                "push r15",
 
                 // fn handler(registers: &mut InterruptStackFrame)
                 "mov rdi, rsp",
                 "call {handler}",
 
                 // .. don't forget
+                                "pop r15",
+                "pop r14",
+                "pop r13",
+                "pop r12",
+                "pop rbp",
+                "pop rbx",
+                "pop r11",
+                "pop r10",
+                "pop r9",
+                "pop r8",
+
                 "pop rcx",
                 "pop rdx",
                 "pop rsi",
@@ -130,16 +174,20 @@ macro_rules! wrap_interrupt {
     }}
 }
 
-pub type HandlerFuncWithErrCode = unsafe extern "C" fn(_: TrampolineMarkerErrorCode);
-pub type HandlerFunc = unsafe extern "C" fn(_: TrampolineMarker);
+pub type HandlerFuncWithErrCode = unsafe extern "C" fn(_:TrampolineMarkerErrorCode);
+pub type HandlerFunc = unsafe extern "C" fn(_:TrampolineMarker);
 
 /// Just as an example: Invalid Opcode handler.
-unsafe extern "C" fn invalid_opcode(regs: &mut InterruptStackFrame) {}
+unsafe extern "C" fn invalid_opcode(regs: &mut InterruptStackFrame) {
+    serial_print!("EXCEPTION: INVALID OPCODE");
+    loop {}
+}
 
 /// Implement other handlers here
 unsafe extern "C" fn timer(regs: &mut InterruptStackFrame) {
     // print .
-    // don't forget to acknowledge the interrupt here
+    serial_print!(".");
+    crate::interrupt::lapic::end_of_interrupt();
 }
 
 /// Registers passed to the interrupt handler
@@ -162,6 +210,12 @@ pub struct InterruptStackFrame {
     pub rdi: u64,
     pub rax: u64,
     // Implement: add the 5 values + error code added by the hardware
+    pub error_code: u64,
+    pub rip: u64,
+    pub cs: u64,
+    pub rflags: u64,
+    pub rsp: u64,
+    pub ss: u64,
 }
 
 /// Initializes global interrupt controllers.
@@ -169,37 +223,35 @@ pub struct InterruptStackFrame {
 /// This should be called only once
 #[allow(static_mut_refs)]
 pub unsafe fn init() {
-    unsafe {
-        let pic1 = inb(PIC1_DATA);
-        let pic2 = inb(PIC2_DATA);
-        // Disable 8259 PIC
-        outb(PIC1_DATA, 0xff);
-        outb(PIC2_DATA, 0xff);
+    let pic1 = inb(PIC1_DATA);
+    let pic2: u8 = inb(PIC2_DATA);
+    // Disable 8259 PIC
+    outb(PIC1_DATA, 0xff);
+    outb(PIC2_DATA, 0xff);
 
-        let idt = &mut GLOBAL_IDT;
+    let idt = &mut GLOBAL_IDT;
 
-        // Implement:
-        //
-        // You need to initialize idt with handlers similar to a couple of examples below
-        // of course you need handler implementations, check invalid_opcode above
-        // idt.breakpoint.set_handler_fn(wrap_interrupt!(breakpoint));
-        // idt.page_fault.set_handler_fn(wrap_interrupt_with_error_code!(page_fault));
-        // idt.interrupts[IRQ_TIMER].set_handler_fn(wrap_interrupt!(timer));
+    // Implement: 
+    //
+    // You need to initialize idt with handlers similar to a couple of examples below
+    // of course you need handler implementations, check invalid_opcode above    
+    // idt.breakpoint.set_handler_fn(wrap_interrupt!(breakpoint));
+    // idt.page_fault.set_handler_fn(wrap_interrupt_with_error_code!(page_fault));
+    idt.interrupts[IRQ_TIMER].set_handler_fn(wrap_interrupt!(timer));
 
-        let ioapic_base = mps::probe_ioapic();
-        ioapic::init(ioapic_base);
-    }
+    let ioapic_base = mps::probe_ioapic();
+    ioapic::init(ioapic_base);
 }
 
 /// Initializes per-CPU interrupt controllers.
 ///
 /// This should be called only once per CPU.
 pub unsafe fn init_cpu() {
-    unsafe {
-        lapic::init();
-        ioapic::init_cpu();
-        GLOBAL_IDT.load();
 
-        asm!("sti");
-    }
+    lapic::init();
+    ioapic::init_cpu();
+    // GLOBAL_IDT.load();
+    unsafe { (*core::ptr::addr_of!(GLOBAL_IDT)).load(); }
+
+    asm!("sti");
 }

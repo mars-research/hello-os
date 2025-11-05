@@ -1,6 +1,7 @@
 global start
 global long_mode_start
 extern rust_main
+global _bootinfo
 
 section .text
 
@@ -10,6 +11,16 @@ long_mode_start:
     ; initialize segments
     ; setup stack
 
+    ; load 0 into all data segment registers
+    mov ax, 0
+    mov ss, ax
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    mov esp, stack_top
+
     call rust_main
 
     hlt
@@ -17,8 +28,8 @@ long_mode_start:
 
 bits 32    ; By default, GRUB sets us to 32-bit mode.
 start:
-
     ; setup page tables 
+    call check_multiboot
     call set_up_page_tables
         
     call enable_paging
@@ -31,13 +42,40 @@ start:
     ; jump to long mode 
     jmp gdt64.code:long_mode_start
 
-
+bits 32
+check_multiboot:
+    cmp eax, 0x36d76289 ; If multiboot, this value will be in the eax register on boot.
+    mov [_bootinfo], ebx
+    jne .no_multiboot
+    ret
+.no_multiboot:
+    mov al, "0"
+    jmp error
 
 set_up_page_tables:
     ;
     ; connect pml4 and pml3
 
     ; write a loop that initializes pml3 to map 4GBs
+
+    mov eax, p3_table
+    or eax, 0b11
+    mov [p4_table], eax
+
+    ;Setign up page_table3
+    ;for i in 0..3
+    ; p3[i] = i*1GB + | Present | R/W | Huge
+    xor edi, edi        ; i = 0
+.loop:
+    mov eax, edi
+    shl eax, 30
+    or eax, 0b10000011
+    mov [p3_table + 8*edi], eax
+
+    inc edi
+    cmp edi, 4          ; compare i with 4
+    jne .loop           ; jump if i != 4
+
     ret
 
 enable_paging:
@@ -93,4 +131,5 @@ stack_bottom:
     resb 4096 * 4 ; Reserve this many bytes
 stack_top:
 
-
+_bootinfo:
+    resb 8 ; Place holder to save bootinfo entry
