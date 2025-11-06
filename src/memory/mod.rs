@@ -1,4 +1,5 @@
 use crate::serial_println;
+pub mod test;
 use core::ptr::addr_of_mut;
 use core::mem::{size_of, MaybeUninit};
 use crate::multibootv2::BootInformation;
@@ -63,6 +64,88 @@ impl Default for PageMeta {
         }
     }
 }
+
+#[inline(always)]
+unsafe fn super_head(pfn: u32) -> u32 {
+    meta(pfn).head_pfn
+}
+
+/// Convert a Free2MB super (whose head is on FREE2MB) to 512 Free4K pages,
+/// allocate one page from it, and enqueue the remaining 511 4K pages.
+/// Returns the PFN of the allocated 4K page.
+unsafe fn split_2mb_head_to_4k_and_take_one(head: u32) -> u32 {
+    // Remove 2MB head from the 2MB list
+    list_remove(addr_of_mut!(FREE2MB_HEAD), head);
+
+    // Mark all 512 pages as Free4K and push them onto the 4K list.
+    for off in 0..PAGES_PER_SUPER {
+        let p = head + off as u32;
+        let m = meta(p);
+        debug_assert!(m.state == PageState::Free2MB && m.head_pfn == head);
+        m.state = PageState::Free4K;
+        m.prev = u32::MAX; m.next = u32::MAX;
+        // head_pfn already set to head
+    }
+
+    // Track: after splitting we have 512 free 4K in this super.
+    meta(head).free4k_in_super = PAGES_PER_SUPER as u16;
+
+    // Allocate one from this super *directly* (don’t push+pop).
+    // Take the first page (head) as the allocated one; enqueue the rest.
+    let take = head;
+    {
+        let m = meta(take);
+        debug_assert!(m.state == PageState::Free4K);
+        m.state = PageState::Alloc4K;
+    }
+    meta(head).free4k_in_super -= 1;
+
+    // Push the remaining 511 pages to the FREE4K list.
+    for off in 1..PAGES_PER_SUPER {
+        let p = head + off as u32;
+        list_push(addr_of_mut!(FREE4K_HEAD), p);
+    }
+
+    take
+}
+
+/// Remove all 512 4K pages of a super from FREE4K, mark them Free2MB,
+/// and enqueue the head on FREE2MB. Assumes free4k_in_super == 512.
+unsafe fn coalesce_super_to_2mb(head: u32) {
+    // Remove each page of the super from the 4K list and mark Free2MB.
+    for off in 0..PAGES_PER_SUPER {
+        let p = head + off as u32;
+        // Every page should be Free4K and be on the FREE4K list
+        let m = meta(p);
+        debug_assert!(m.state == PageState::Free4K);
+        list_remove(addr_of_mut!(FREE4K_HEAD), p);
+
+        m.state = PageState::Free2MB;
+        m.prev = u32::MAX; m.next = u32::MAX;
+        m.head_pfn = head; // keep grouping
+    }
+
+    let hm = meta(head);
+    hm.free4k_in_super = 0;
+
+    // Enqueue the head in the 2MB list.
+    list_push(addr_of_mut!(FREE2MB_HEAD), head);
+}
+
+/// Search FREE4K list for a super whose head has all 512 4K pages free.
+/// O(n) in size of the 4K free list (OK for homework).
+unsafe fn find_fully_free_super_head_from_4k() -> Option<u32> {
+    let mut cur = FREE4K_HEAD;
+    while is_valid_idx(cur) {
+        let head = meta(cur).head_pfn;
+        if is_valid_idx(head) && meta(head).free4k_in_super as usize == PAGES_PER_SUPER {
+            return Some(head);
+        }
+        cur = meta(cur).next;
+    }
+    None
+}
+
 
 // Global pointer to page metadata and total page count.
 static mut PAGE_ARRAY: *mut PageMeta = core::ptr::null_mut();
@@ -161,51 +244,83 @@ unsafe fn list_pop(head_ptr: *mut u32) -> Option<u32> {
 }
 
 
-/// Build FREE4K and FREE2MB lists from page_array states.
-/// - Every Free4K PFN is enqueued into FREE4K.
-/// - Only 2MB-aligned Free2MB heads are enqueued into FREE2MB.
-/// Followers of Free2MB remain off the list (by design).
 pub unsafe fn seed_free_lists_from_states() {
     // Reset heads
     FREE4K_HEAD  = u32::MAX;
     FREE2MB_HEAD = u32::MAX;
 
+    // 0) Clear link fields on every page.
     for pfn in 0..NUM_PAGES as u32 {
         let m = meta(pfn);
-
-        // ensure clean link fields before enqueue
         m.prev = u32::MAX;
         m.next = u32::MAX;
+    }
 
+    // 1) Zero the per-super counters on every potential head we will use.
+    //    (Some supers may be partially Free4K; we still keep the counter on the head.)
+    for pfn in 0..NUM_PAGES as u32 {
+        let h = meta(pfn).head_pfn;
+        if is_valid_idx(h) && is_super_aligned_pfn(h) {
+            meta(h).free4k_in_super = 0;
+        }
+    }
+
+    // 2) Enqueue and count.
+    for pfn in 0..NUM_PAGES as u32 {
+        let m = meta(pfn);
         match m.state {
             PageState::Free4K => {
+                // Count this page toward its super head
+                let h = m.head_pfn;
+                if is_valid_idx(h) {
+                    let hm = meta(h);
+                    hm.free4k_in_super = hm.free4k_in_super.saturating_add(1);
+                }
+                // Put this PFN on the 4K free list
                 list_push(addr_of_mut!(FREE4K_HEAD), pfn);
             }
             PageState::Free2MB => {
-                // Only enqueue the super head
+                // Only enqueue 2MB-aligned heads whose head_pfn == self
                 if is_super_aligned_pfn(pfn) && m.head_pfn == pfn {
+                    // By definition a coalesced super has 0 free4k_in_super
+                    m.free4k_in_super = 0;
                     list_push(addr_of_mut!(FREE2MB_HEAD), pfn);
                 }
             }
-            _ => { /* not on any free list */ }
+            _ => {}
         }
     }
 }
 
-/// Allocate one 4KiB page. No split logic yet.
+
 pub unsafe fn alloc_4k() -> Option<u64> {
+    // Fast path: pop from FREE4K.
     if let Some(pfn) = list_pop(addr_of_mut!(FREE4K_HEAD)) {
         let m = meta(pfn);
         debug_assert!(m.state == PageState::Free4K);
         m.state = PageState::Alloc4K;
-        // keep links cleared
         m.prev = u32::MAX; m.next = u32::MAX;
+
+        // Decrement the super's free4k counter
+        let h = m.head_pfn;
+        if is_valid_idx(h) {
+            let hm = meta(h);
+            debug_assert!(hm.free4k_in_super > 0);
+            hm.free4k_in_super -= 1;
+        }
         return Some((pfn as u64) * (BASE_PAGE_SIZE as u64));
     }
+
+    // Slow path: split a 2MB super into 4K pages and take one.
+    if let Some(head) = list_pop(addr_of_mut!(FREE2MB_HEAD)) {
+        let take = split_2mb_head_to_4k_and_take_one(head);
+        return Some((take as u64) * (BASE_PAGE_SIZE as u64));
+    }
+
     None
 }
 
-/// Free a 4KiB page. No coalesce logic yet.
+
 pub unsafe fn free_4k(paddr: u64) {
     let pfn = (paddr / BASE_PAGE_SIZE as u64) as u32;
     let m = meta(pfn);
@@ -213,27 +328,59 @@ pub unsafe fn free_4k(paddr: u64) {
         serial_println!("free_4k: PFN {} not Alloc4K (state={:?})", pfn, m.state);
         return;
     }
+
+    // Mark Free4K and push to FREE4K list.
     m.state = PageState::Free4K;
     m.prev = u32::MAX; m.next = u32::MAX;
+    let head = m.head_pfn;
     list_push(addr_of_mut!(FREE4K_HEAD), pfn);
+
+    // Update super counter; if full, coalesce.
+    if is_valid_idx(head) {
+        let hm = meta(head);
+        // Increment and check if we reached 512 free pages in this super.
+        let new_count = hm.free4k_in_super.checked_add(1).unwrap();
+        hm.free4k_in_super = new_count;
+
+        if new_count as usize == PAGES_PER_SUPER {
+            coalesce_super_to_2mb(head);
+        }
+    }
 }
 
-/// Allocate one 2MiB superpage. No split/merge involved here.
+
 pub unsafe fn alloc_2mb() -> Option<u64> {
+    // Try direct 2MB free list first.
     if let Some(head) = list_pop(addr_of_mut!(FREE2MB_HEAD)) {
-        // mark all 512 pages Alloc2MB
         for off in 0..PAGES_PER_SUPER {
             let p = head + off as u32;
             let m = meta(p);
             debug_assert!(m.state == PageState::Free2MB && m.head_pfn == head);
             m.state = PageState::Alloc2MB;
             m.prev = u32::MAX; m.next = u32::MAX;
-            // head_pfn remains head
         }
         return Some((head as u64) * (BASE_PAGE_SIZE as u64));
     }
+
+    // Otherwise see if any super is fully free as 4K and coalesce on demand.
+    if let Some(head) = find_fully_free_super_head_from_4k() {
+        // Turn those 512 Free4K pages back to Free2MB, then allocate them.
+        coalesce_super_to_2mb(head);
+        // Now pop that head from FREE2MB and mark Alloc2MB.
+        let got = list_pop(addr_of_mut!(FREE2MB_HEAD)).expect("coalesce inserted head");
+        debug_assert_eq!(got, head);
+        for off in 0..PAGES_PER_SUPER {
+            let p = head + off as u32;
+            let m = meta(p);
+            debug_assert!(m.state == PageState::Free2MB);
+            m.state = PageState::Alloc2MB;
+        }
+        return Some((head as u64) * (BASE_PAGE_SIZE as u64));
+    }
+
     None
 }
+
 
 /// Free one 2MiB superpage (paddr must be 2MiB-aligned).
 pub unsafe fn free_2mb(paddr: u64) {
@@ -418,13 +565,15 @@ pub unsafe fn init_allocator(boot: &BootInformation) {
     // Build the freelists based on the states we just marked.
     seed_free_lists_from_states();
 
-    // (Optional) quick stats
-    unsafe {
-        dump_state_summary(); // now you should see non-zero Free4K/Free2MB
-        let free4k_head = unsafe{FREE4K_HEAD};
-        let free2mb_head = unsafe{FREE2MB_HEAD};
-        serial_println!("FREE4K_HEAD={:#x} FREE2MB_HEAD={:#x}", free4k_head, free2mb_head);
-    }
+    // Testing
+    // test_all()
+    // quick stats
+    // unsafe {
+    //     dump_state_summary(); // now you should see non-zero Free4K/Free2MB
+    //     let free4k_head = unsafe{FREE4K_HEAD};
+    //     let free2mb_head = unsafe{FREE2MB_HEAD};
+    //     serial_println!("FREE4K_HEAD={:#x} FREE2MB_HEAD={:#x}", free4k_head, free2mb_head);
+    // }
 }
 
 
@@ -531,3 +680,66 @@ pub unsafe fn test_alloc_free_basic() {
                     serial_println!("alloc_4k returned None (no 4K pages available)");
                 }
 }
+
+
+use core::alloc::{GlobalAlloc, Layout};
+use core::ptr::null_mut;
+
+// Expose your alloc_4k/alloc_2mb/free_4k/free_2mb from above in this module scope.
+
+pub struct KernelAllocator;
+
+impl KernelAllocator {
+    pub const fn new() -> Self { KernelAllocator }
+    #[inline(always)]
+    fn is_2mb_aligned(align: usize) -> bool {
+        align >= SUPER_SIZE && (align % SUPER_SIZE) == 0
+    }
+}
+
+unsafe impl GlobalAlloc for KernelAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let size  = layout.size();
+        let align = layout.align();
+
+        // 4 KiB path
+        if size <= BASE_PAGE_SIZE && align <= BASE_PAGE_SIZE {
+            if let Some(paddr) = alloc_4k() {
+                return (paddr as usize) as *mut u8; // identity-mapped
+            } else {
+                return core::ptr::null_mut();
+            }
+        }
+
+        // NEW: 4 KiB < size ≤ 2 MiB → just give a 2 MiB superpage
+        if size <= SUPER_SIZE {
+            if let Some(paddr) = alloc_2mb() {
+                return (paddr as usize) as *mut u8; // identity-mapped
+            } else {
+                return core::ptr::null_mut();
+            }
+        }
+
+        // > 2 MiB not supported in this HW
+        core::ptr::null_mut()
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        if ptr.is_null() { return; }
+        let paddr = ptr as u64;
+
+        if layout.size() <= BASE_PAGE_SIZE && layout.align() <= BASE_PAGE_SIZE {
+            free_4k(paddr);
+        } else if layout.size() <= SUPER_SIZE {
+            // We rounded up all (4K, 2MB] requests to a 2MB block,
+            // so always free as 2MB here.
+            free_2mb(paddr);
+        } else {
+            // unsupported
+        }
+    }
+}
+
+
+#[global_allocator]
+pub static ALLOCATOR: KernelAllocator = KernelAllocator::new();

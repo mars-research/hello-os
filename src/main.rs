@@ -1,6 +1,17 @@
 #![allow(warnings)]
 #![cfg_attr(not(test), no_std, no_main)]
 #![feature(abi_x86_interrupt)]
+#![feature(alloc_error_handler)]
+
+extern crate alloc;
+
+use core::alloc::Layout;
+
+#[alloc_error_handler]
+fn alloc_error(layout: Layout) -> ! {
+    panic!("kernel OOM: {:?}", layout);
+}
+
 use core::panic::PanicInfo;
 mod serial;
 mod error;
@@ -29,7 +40,8 @@ pub extern "C" fn rust_main() -> ! {
 
         unsafe {
             crate::memory::init_allocator(&bootinfo);
-            crate::memory::dump_allocator_header();
+            crate::memory::test::test_all();
+            // crate::memory::dump_allocator_header();
             // First few entries (should be Unavailable):
             // crate::memory::dump_page_array(0, 8);
 
@@ -38,8 +50,8 @@ pub extern "C" fn rust_main() -> ! {
             // let paddr = crate::memory::alloc_4k().expect("alloc_4k failed");
             // crate::memory::free_4k(paddr);
             // Optional (right now will be all Unavailable):
-            unsafe { crate::memory::test_alloc_free_basic(); }
-            crate::memory::dump_state_summary();
+            // unsafe { crate::memory::test_alloc_free_basic(); }
+            // crate::memory::dump_state_summary();
         }
         loop {}
     }
