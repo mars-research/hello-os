@@ -31,12 +31,14 @@ pub extern "C" fn rust_main() -> ! {
             crate::memory::init_allocator(&bootinfo);
             crate::memory::dump_allocator_header();
             // First few entries (should be Unavailable):
-            crate::memory::dump_page_array(0, 8);
+            // crate::memory::dump_page_array(0, 8);
 
             // Around the boundary (end_pfn - 4 .. end_pfn + 4):
-            crate::memory::dump_around_kernel_end(4);
-
+            // crate::memory::dump_around_kernel_end(4);
+            // let paddr = crate::memory::alloc_4k().expect("alloc_4k failed");
+            // crate::memory::free_4k(paddr);
             // Optional (right now will be all Unavailable):
+            unsafe { crate::memory::test_alloc_free_basic(); }
             crate::memory::dump_state_summary();
         }
         loop {}

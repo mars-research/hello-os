@@ -1,4 +1,5 @@
 use crate::serial_println;
+use core::ptr::addr_of_mut;
 use core::mem::{size_of, MaybeUninit};
 use crate::multibootv2::BootInformation;
 pub const BASE_PAGE_SIZE: usize = 4096;
@@ -66,6 +67,202 @@ impl Default for PageMeta {
 // Global pointer to page metadata and total page count.
 static mut PAGE_ARRAY: *mut PageMeta = core::ptr::null_mut();
 static mut NUM_PAGES: usize = 0;
+// Heads for the two free lists; each node is a PFN (index into PAGE_ARRAY).
+static mut FREE4K_HEAD: u32  = u32::MAX;
+static mut FREE2MB_HEAD: u32 = u32::MAX;
+
+#[inline]
+fn is_super_aligned_pfn(pfn: u32) -> bool {
+    (pfn as usize) % PAGES_PER_SUPER == 0
+}
+
+#[inline] fn is_valid_idx(i: u32) -> bool { i != u32::MAX }
+
+#[inline]
+unsafe fn meta(pfn: u32) -> &'static mut PageMeta {
+    &mut *PAGE_ARRAY.add(pfn as usize)
+}
+
+/// Check if PFN is present on a given free list (by walking it).
+unsafe fn is_on_list(head_ptr: *mut u32, pfn: u32) -> bool {
+    let mut cur = *head_ptr;
+    while is_valid_idx(cur) {
+        if cur == pfn { return true; }
+        cur = meta(cur).next;
+    }
+    false
+}
+
+#[inline(always)]
+unsafe fn expect_state(pfn: u32, want: PageState, label: &str) {
+    let got = meta(pfn).state;
+    if got != want {
+        serial_println!("EXPECT FAIL [{}]: pfn={} state={:?} want={:?}", label, pfn, got, want);
+    } else {
+        serial_println!("OK [{}]: pfn={} state={:?}", label, pfn, got);
+    }
+}
+
+#[inline(always)]
+unsafe fn expect_on_free4k(pfn: u32, label: &str) {
+    let ok = is_on_list(addr_of_mut!(FREE4K_HEAD), pfn);
+    if !ok { serial_println!("EXPECT FAIL [{}]: pfn {} not on FREE4K list", label, pfn); }
+    else   { serial_println!("OK [{}]: pfn {} on FREE4K list", label, pfn); }
+}
+
+#[inline(always)]
+unsafe fn expect_off_free4k(pfn: u32, label: &str) {
+    let ok = !is_on_list(addr_of_mut!(FREE4K_HEAD), pfn);
+    if !ok { serial_println!("EXPECT FAIL [{}]: pfn {} unexpectedly on FREE4K list", label, pfn); }
+    else   { serial_println!("OK [{}]: pfn {} not on FREE4K list", label, pfn); }
+}
+
+#[inline(always)]
+unsafe fn expect_on_free2mb_head(pfn: u32, label: &str) {
+    let ok = is_on_list(addr_of_mut!(FREE2MB_HEAD), pfn);
+    if !ok { serial_println!("EXPECT FAIL [{}]: head pfn {} not on FREE2MB list", label, pfn); }
+    else   { serial_println!("OK [{}]: head pfn {} on FREE2MB list", label, pfn); }
+}
+
+unsafe fn list_push(head_ptr: *mut u32, pfn: u32) {
+    let head = &mut *head_ptr;
+    let node = meta(pfn);
+    debug_assert!(node.prev == u32::MAX && node.next == u32::MAX, "double-enqueue?");
+    node.prev = u32::MAX;
+    node.next = *head;
+    if is_valid_idx(*head) {
+        meta(*head).prev = pfn;
+    }
+    *head = pfn;
+}
+
+unsafe fn list_remove(head_ptr: *mut u32, pfn: u32) {
+    let head = &mut *head_ptr;
+    let node = meta(pfn);
+    let prev = node.prev;
+    let next = node.next;
+
+    if is_valid_idx(prev) { meta(prev).next = next; }
+    if is_valid_idx(next) { meta(next).prev = prev; }
+    if *head == pfn { *head = next; }
+
+    node.prev = u32::MAX;
+    node.next = u32::MAX;
+}
+
+unsafe fn list_pop(head_ptr: *mut u32) -> Option<u32> {
+    let head = &mut *head_ptr;
+    if !is_valid_idx(*head) {
+        return None;
+    }
+    let p = *head;
+    list_remove(head_ptr, p);
+    Some(p)
+}
+
+
+/// Build FREE4K and FREE2MB lists from page_array states.
+/// - Every Free4K PFN is enqueued into FREE4K.
+/// - Only 2MB-aligned Free2MB heads are enqueued into FREE2MB.
+/// Followers of Free2MB remain off the list (by design).
+pub unsafe fn seed_free_lists_from_states() {
+    // Reset heads
+    FREE4K_HEAD  = u32::MAX;
+    FREE2MB_HEAD = u32::MAX;
+
+    for pfn in 0..NUM_PAGES as u32 {
+        let m = meta(pfn);
+
+        // ensure clean link fields before enqueue
+        m.prev = u32::MAX;
+        m.next = u32::MAX;
+
+        match m.state {
+            PageState::Free4K => {
+                list_push(addr_of_mut!(FREE4K_HEAD), pfn);
+            }
+            PageState::Free2MB => {
+                // Only enqueue the super head
+                if is_super_aligned_pfn(pfn) && m.head_pfn == pfn {
+                    list_push(addr_of_mut!(FREE2MB_HEAD), pfn);
+                }
+            }
+            _ => { /* not on any free list */ }
+        }
+    }
+}
+
+/// Allocate one 4KiB page. No split logic yet.
+pub unsafe fn alloc_4k() -> Option<u64> {
+    if let Some(pfn) = list_pop(addr_of_mut!(FREE4K_HEAD)) {
+        let m = meta(pfn);
+        debug_assert!(m.state == PageState::Free4K);
+        m.state = PageState::Alloc4K;
+        // keep links cleared
+        m.prev = u32::MAX; m.next = u32::MAX;
+        return Some((pfn as u64) * (BASE_PAGE_SIZE as u64));
+    }
+    None
+}
+
+/// Free a 4KiB page. No coalesce logic yet.
+pub unsafe fn free_4k(paddr: u64) {
+    let pfn = (paddr / BASE_PAGE_SIZE as u64) as u32;
+    let m = meta(pfn);
+    if m.state != PageState::Alloc4K {
+        serial_println!("free_4k: PFN {} not Alloc4K (state={:?})", pfn, m.state);
+        return;
+    }
+    m.state = PageState::Free4K;
+    m.prev = u32::MAX; m.next = u32::MAX;
+    list_push(addr_of_mut!(FREE4K_HEAD), pfn);
+}
+
+/// Allocate one 2MiB superpage. No split/merge involved here.
+pub unsafe fn alloc_2mb() -> Option<u64> {
+    if let Some(head) = list_pop(addr_of_mut!(FREE2MB_HEAD)) {
+        // mark all 512 pages Alloc2MB
+        for off in 0..PAGES_PER_SUPER {
+            let p = head + off as u32;
+            let m = meta(p);
+            debug_assert!(m.state == PageState::Free2MB && m.head_pfn == head);
+            m.state = PageState::Alloc2MB;
+            m.prev = u32::MAX; m.next = u32::MAX;
+            // head_pfn remains head
+        }
+        return Some((head as u64) * (BASE_PAGE_SIZE as u64));
+    }
+    None
+}
+
+/// Free one 2MiB superpage (paddr must be 2MiB-aligned).
+pub unsafe fn free_2mb(paddr: u64) {
+    if (paddr % (SUPER_SIZE as u64)) != 0 {
+        serial_println!("free_2mb: paddr {:#x} not 2MiB-aligned", paddr);
+        return;
+    }
+    let head = (paddr / BASE_PAGE_SIZE as u64) as u32;
+    // mark all 512 pages Free2MB, then enqueue the head
+    for off in 0..PAGES_PER_SUPER {
+        let p = head + off as u32;
+        let m = meta(p);
+        if m.state != PageState::Alloc2MB {
+            serial_println!("free_2mb: PFN {} not Alloc2MB (state={:?})", p, m.state);
+            return;
+        }
+    }
+    for off in 0..PAGES_PER_SUPER {
+        let p = head + off as u32;
+        let m = meta(p);
+        m.state = PageState::Free2MB;
+        m.prev = u32::MAX; m.next = u32::MAX;
+        m.head_pfn = head; // keep correct grouping
+        m.free4k_in_super = 0;
+    }
+    // push only the head
+    list_push(addr_of_mut!(FREE2MB_HEAD), head);
+}
+
 
 // Marks [start_pfn, end_pfn_excl) as Unavailable.
 #[inline]
@@ -188,11 +385,14 @@ pub unsafe fn init_allocator(boot: &BootInformation) {
     PAGE_ARRAY = meta_base as *mut PageMeta;
 
     // 3) Default-initialize page_array (everything starts Unavailable).
-    {
-        let slots = core::slice::from_raw_parts_mut(
+    unsafe {
+        // Create a &mut [MaybeUninit<PageMeta>] pointing at PAGE_ARRAY
+        let slots: &mut [MaybeUninit<PageMeta>] = core::slice::from_raw_parts_mut(
             PAGE_ARRAY as *mut MaybeUninit<PageMeta>,
             NUM_PAGES,
         );
+
+        // Default-initialize each entry
         for slot in slots.iter_mut() {
             slot.write(PageMeta::default());
         }
@@ -214,6 +414,17 @@ pub unsafe fn init_allocator(boot: &BootInformation) {
     let end_pfn = paddr_to_pfn(KERNEL_END);
     mark_unavailable_range(0, end_pfn);
     mark_free_states_no_lists(boot);
+
+    // Build the freelists based on the states we just marked.
+    seed_free_lists_from_states();
+
+    // (Optional) quick stats
+    unsafe {
+        dump_state_summary(); // now you should see non-zero Free4K/Free2MB
+        let free4k_head = unsafe{FREE4K_HEAD};
+        let free2mb_head = unsafe{FREE2MB_HEAD};
+        serial_println!("FREE4K_HEAD={:#x} FREE2MB_HEAD={:#x}", free4k_head, free2mb_head);
+    }
 }
 
 
@@ -300,4 +511,23 @@ pub unsafe fn dump_state_summary() {
         "state summary: Unavail={} Free4K={} Free2MB={} Alloc4K={} Alloc2MB={}",
         c_un, c_f4, c_f2, c_a4, c_a2
     );
+}
+
+pub unsafe fn test_alloc_free_basic() {
+                    if let Some(paddr) = alloc_4k() {
+                    let pfn = paddr_to_pfn(paddr);
+
+                    // After alloc: page should be Alloc4K and not on FREE4K list.
+                    expect_state(pfn, PageState::Alloc4K, "alloc_4k state");
+                    expect_off_free4k(pfn, "alloc_4k list");
+
+                    // Free it back.
+                    free_4k(paddr);
+
+                    // After free: page should be Free4K and present on FREE4K list.
+                    expect_state(pfn, PageState::Free4K, "free_4k state");
+                    expect_on_free4k(pfn, "free_4k list");
+                } else {
+                    serial_println!("alloc_4k returned None (no 4K pages available)");
+                }
 }
