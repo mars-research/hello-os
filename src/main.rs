@@ -7,6 +7,12 @@ extern crate alloc;
 
 use core::alloc::Layout;
 
+#[allow(unused)]
+pub fn println(s: &str) {
+    // Forward to your serial logger; `serial_println!` is a macro.
+    crate::serial_println!("{}", s);
+}
+
 #[alloc_error_handler]
 fn alloc_error(layout: Layout) -> ! {
     panic!("kernel OOM: {:?}", layout);
