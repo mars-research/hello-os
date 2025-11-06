@@ -7,10 +7,11 @@ extern crate alloc;
 
 use core::alloc::Layout;
 
-#[allow(unused)]
-pub fn println(s: &str) {
-    // Forward to your serial logger; `serial_println!` is a macro.
-    crate::serial_println!("{}", s);
+#[macro_export]
+macro_rules! println {
+    ($($arg:tt)*) => {
+        $crate::serial_println!($($arg)*);
+    };
 }
 
 #[alloc_error_handler]
